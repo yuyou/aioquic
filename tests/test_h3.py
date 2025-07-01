@@ -1711,6 +1711,18 @@ class H3ConnectionTest(TestCase):
             ),
         )
 
+    def test_streams_are_closed_after_requests(self):
+        with h3_client_and_server() as (quic_client, quic_server):
+            h3_client = H3Connection(quic_client)
+            h3_server = H3Connection(quic_server)
+
+            for _ in range(6):
+                self._make_request(h3_client, h3_server)
+
+            # Only 3 streams should be opened: Control, QPACK encoder and QPACK decoder
+            self.assertEqual(len(h3_client._stream), 3)
+            self.assertEqual(len(h3_server._stream), 3)
+
 
 class H3ParserTest(TestCase):
     def test_parse_settings_duplicate_identifier(self):
