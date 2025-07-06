@@ -437,16 +437,7 @@ class H3Connection:
         if not self._is_done:
             try:
                 if isinstance(event, StreamDataReceived):
-                    stream_id = event.stream_id
-                    stream = self._get_or_create_stream(stream_id)
-                    if stream_is_unidirectional(stream_id):
-                        return self._receive_stream_data_uni(
-                            stream, event.data, event.end_stream
-                        )
-                    else:
-                        return self._receive_request_or_push_data(
-                            stream, event.data, event.end_stream
-                        )
+                    return self._receive_stream_data(event)
                 elif isinstance(event, DatagramFrameReceived):
                     return self._receive_datagram(event.data)
             except ProtocolError as exc:
@@ -890,6 +881,17 @@ class H3Connection:
         return [
             DatagramReceived(data=data[buf.tell() :], stream_id=quarter_stream_id * 4)
         ]
+
+    def _receive_stream_data(self, event: StreamDataReceived) -> List[H3Event]:
+        stream_id = event.stream_id
+        stream = self._get_or_create_stream(stream_id)
+
+        if stream_is_unidirectional(stream_id):
+            return self._receive_stream_data_uni(stream, event.data, event.end_stream)
+        else:
+            return self._receive_request_or_push_data(
+                stream, event.data, event.end_stream
+            )
 
     def _receive_request_or_push_data(
         self, stream: H3Stream, data: bytes, stream_ended: bool
