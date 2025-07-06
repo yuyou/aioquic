@@ -345,7 +345,7 @@ class H3Stream:
         self.blocked = False
         self.blocked_frame_size: Optional[int] = None
         self.buffer = b""
-        self.ended = False
+        self.receiving_ended = False
         self.frame_size: Optional[int] = None
         self.frame_type: Optional[int] = None
         self.headers_recv_state: HeadersState = HeadersState.INITIAL
@@ -903,7 +903,7 @@ class H3Connection:
 
         stream.buffer += data
         if stream_ended:
-            stream.ended = True
+            stream.receiving_ended = True
         if stream.blocked:
             return http_events
 
@@ -1027,7 +1027,7 @@ class H3Connection:
                         frame_type=frame_type,
                         frame_data=frame_data,
                         stream=stream,
-                        stream_ended=stream.ended and buf.eof(),
+                        stream_ended=stream.receiving_ended and buf.eof(),
                     )
                 )
             except pylsqpack.StreamBlocked:
@@ -1047,7 +1047,7 @@ class H3Connection:
 
         stream.buffer += data
         if stream_ended:
-            stream.ended = True
+            stream.receiving_ended = True
 
         buf = Buffer(data=stream.buffer)
         consumed = 0
@@ -1140,7 +1140,7 @@ class H3Connection:
                         WebTransportStreamDataReceived(
                             data=frame_data,
                             session_id=stream.session_id,
-                            stream_ended=stream.ended,
+                            stream_ended=stream.receiving_ended,
                             stream_id=stream.stream_id,
                         )
                     )
@@ -1181,7 +1181,7 @@ class H3Connection:
                     frame_type=FrameType.HEADERS,
                     frame_data=None,
                     stream=stream,
-                    stream_ended=stream.ended and not stream.buffer,
+                    stream_ended=stream.receiving_ended and not stream.buffer,
                 )
             )
             stream.blocked = False
@@ -1190,7 +1190,9 @@ class H3Connection:
             # resume processing
             if stream.buffer:
                 http_events.extend(
-                    self._receive_request_or_push_data(stream, b"", stream.ended)
+                    self._receive_request_or_push_data(
+                        stream, b"", stream.receiving_ended
+                    )
                 )
 
         return http_events
