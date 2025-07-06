@@ -1,5 +1,7 @@
+import contextlib
 import logging
 import re
+from collections.abc import Generator
 from enum import Enum, IntEnum
 from typing import Dict, FrozenSet, List, Optional, Set
 
@@ -358,6 +360,9 @@ class H3Stream:
         self.expected_content_length: Optional[int] = None
         self.content_length: int = 0
 
+    def is_ended(self) -> bool:
+        return self.sending_ended and self.receiving_ended and not self.blocked
+
     def finish_sending(self) -> None:
         if self.sending_ended:
             raise FrameUnexpected("stream was already ended")
@@ -533,11 +538,11 @@ class H3Connection:
         :param end_stream: Whether to end the stream.
         """
         # check DATA frame is allowed
-        stream = self._get_or_create_stream(stream_id)
-        if stream.headers_send_state != HeadersState.AFTER_HEADERS:
-            raise FrameUnexpected("DATA frame is not allowed in this state")
-        if end_stream:
-            stream.finish_sending()
+        with self._get_or_create_stream(stream_id) as stream:
+            if stream.headers_send_state != HeadersState.AFTER_HEADERS:
+                raise FrameUnexpected("DATA frame is not allowed in this state")
+            if end_stream:
+                stream.finish_sending()
 
         # log frame
         if self._quic_logger is not None:
@@ -566,32 +571,32 @@ class H3Connection:
         :param end_stream: Whether to end the stream.
         """
         # check HEADERS frame is allowed
-        stream = self._get_or_create_stream(stream_id)
-        if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
-            raise FrameUnexpected("HEADERS frame is not allowed in this state")
-        if end_stream:
-            stream.finish_sending()
+        with self._get_or_create_stream(stream_id) as stream:
+            if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
+                raise FrameUnexpected("HEADERS frame is not allowed in this state")
+            if end_stream:
+                stream.finish_sending()
 
-        frame_data = self._encode_headers(stream_id, headers)
+            frame_data = self._encode_headers(stream_id, headers)
 
-        # log frame
-        if self._quic_logger is not None:
-            self._quic_logger.log_event(
-                category="http",
-                event="frame_created",
-                data=self._quic_logger.encode_http3_headers_frame(
-                    length=len(frame_data), headers=headers, stream_id=stream_id
-                ),
+            # log frame
+            if self._quic_logger is not None:
+                self._quic_logger.log_event(
+                    category="http",
+                    event="frame_created",
+                    data=self._quic_logger.encode_http3_headers_frame(
+                        length=len(frame_data), headers=headers, stream_id=stream_id
+                    ),
+                )
+
+            # update state and send headers
+            if stream.headers_send_state == HeadersState.INITIAL:
+                stream.headers_send_state = HeadersState.AFTER_HEADERS
+            else:
+                stream.headers_send_state = HeadersState.AFTER_TRAILERS
+            self._quic.send_stream_data(
+                stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
             )
-
-        # update state and send headers
-        if stream.headers_send_state == HeadersState.INITIAL:
-            stream.headers_send_state = HeadersState.AFTER_HEADERS
-        else:
-            stream.headers_send_state = HeadersState.AFTER_TRAILERS
-        self._quic.send_stream_data(
-            stream_id, encode_frame(FrameType.HEADERS, frame_data), end_stream
-        )
 
     @property
     def received_settings(self) -> Optional[Dict[int, int]]:
@@ -647,10 +652,17 @@ class H3Connection:
         self._quic.send_stream_data(self._local_encoder_stream_id, encoder)
         return frame_data
 
-    def _get_or_create_stream(self, stream_id: int) -> H3Stream:
+    @contextlib.contextmanager
+    def _get_or_create_stream(self, stream_id: int) -> Generator[H3Stream]:
         if stream_id not in self._stream:
             self._stream[stream_id] = H3Stream(stream_id)
-        return self._stream[stream_id]
+        stream = self._stream[stream_id]
+        try:
+            yield stream
+        finally:
+            # Don't forget to delete stream objects when they are done
+            if stream.is_ended():
+                self._stream.pop(stream_id)
 
     def _get_local_settings(self) -> Dict[int, int]:
         """
@@ -894,14 +906,15 @@ class H3Connection:
 
     def _receive_stream_data(self, event: StreamDataReceived) -> List[H3Event]:
         stream_id = event.stream_id
-        stream = self._get_or_create_stream(stream_id)
-
-        if stream_is_unidirectional(stream_id):
-            return self._receive_stream_data_uni(stream, event.data, event.end_stream)
-        else:
-            return self._receive_request_or_push_data(
-                stream, event.data, event.end_stream
-            )
+        with self._get_or_create_stream(stream_id) as stream:
+            if stream_is_unidirectional(stream_id):
+                return self._receive_stream_data_uni(
+                    stream, event.data, event.end_stream
+                )
+            else:
+                return self._receive_request_or_push_data(
+                    stream, event.data, event.end_stream
+                )
 
     def _receive_request_or_push_data(
         self, stream: H3Stream, data: bytes, stream_ended: bool
