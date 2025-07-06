@@ -346,6 +346,7 @@ class H3Stream:
         self.blocked_frame_size: Optional[int] = None
         self.buffer = b""
         self.receiving_ended = False
+        self.sending_ended = False
         self.frame_size: Optional[int] = None
         self.frame_type: Optional[int] = None
         self.headers_recv_state: HeadersState = HeadersState.INITIAL
@@ -356,6 +357,11 @@ class H3Stream:
         self.stream_type: Optional[int] = None
         self.expected_content_length: Optional[int] = None
         self.content_length: int = 0
+
+    def finish_sending(self) -> None:
+        if self.sending_ended:
+            raise FrameUnexpected("stream was already ended")
+        self.sending_ended = True
 
 
 class H3Connection:
@@ -530,6 +536,8 @@ class H3Connection:
         stream = self._get_or_create_stream(stream_id)
         if stream.headers_send_state != HeadersState.AFTER_HEADERS:
             raise FrameUnexpected("DATA frame is not allowed in this state")
+        if end_stream:
+            stream.finish_sending()
 
         # log frame
         if self._quic_logger is not None:
@@ -561,6 +569,8 @@ class H3Connection:
         stream = self._get_or_create_stream(stream_id)
         if stream.headers_send_state == HeadersState.AFTER_TRAILERS:
             raise FrameUnexpected("HEADERS frame is not allowed in this state")
+        if end_stream:
+            stream.finish_sending()
 
         frame_data = self._encode_headers(stream_id, headers)
 
