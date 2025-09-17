@@ -65,6 +65,15 @@ class QuicConfiguration:
     Per-stream flow control limit.
     """
 
+    max_streams_bidi: int = 1024
+    """
+    The maximum number of bidirectional streams that can be opened.
+    """
+
+    max_streams_uni: int = 1024
+    """
+    The maximum number of unidirectional streams that can be opened."""
+
     quic_logger: Optional[QuicLogger] = None
     """
     The :class:`~aioquic.quic.logger.QuicLogger` instance to log events to.
